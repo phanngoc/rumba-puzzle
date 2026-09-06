@@ -36,3 +36,21 @@ nghiệm duy nhất chạy được độc lập trên hàng nghìn seed.
 
 ## License
 MIT
+
+## Kết nối platform Arcade
+
+Game dùng [arcade-platform](https://github.com/phanngoc/arcade-platform) cho save
+đồng bộ nhiều máy và bảng xếp hạng. **Platform là bổ sung, không phải phụ thuộc** —
+platform chết thì game vẫn chơi được y như cũ bằng `localStorage`.
+
+| File | Vai trò |
+|---|---|
+| `arcade.toml` | Manifest: mode `offline`, capability `save` + bảng `daily`/`alltime` |
+| `vendor/arcade.js` | SDK bản IIFE (1,7KB gzip) — nạp bằng `<script src>` |
+| `arcade-bridge.js` | Nối game với SDK; mọi lời gọi đều nuốt lỗi |
+
+**Quy đổi điểm:** bảng xếp hạng của platform xếp điểm cao lên trước, còn puzzle thì
+thời gian nhỏ mới tốt — nên nộp `600 − số giây`, chặn dưới ở 1. Giải từ 10 phút trở
+lên không lên bảng. Chỉ nộp khi **không dùng gợi ý**.
+
+`__arcadeApplyRemote` gộp kỷ lục: giữ thời gian **nhỏ hơn** giữa local và remote.

@@ -304,7 +304,26 @@
   // ---------------- win ----------------
   function statKey() { return state.N + '-' + state.diff; }
   function loadStats() { try { return JSON.parse(localStorage.getItem('rumba_stats') || '{}'); } catch (e) { return {}; } }
-  function saveStats(s) { try { localStorage.setItem('rumba_stats', JSON.stringify(s)); } catch (e) {} }
+  function saveStats(s) {
+    try { localStorage.setItem('rumba_stats', JSON.stringify(s)); } catch (e) {}
+    if (window.ArcadeGame) ArcadeGame.syncSave(s);
+  }
+
+  // Bảng xếp hạng của puzzle là THỜI GIAN NHỎ NHẤT, mà ZSET của platform xếp
+  // điểm cao lên trước -> nộp (600 - giây) và chặn dưới 1. Giải trong 10 phút
+  // trở lên thì không lên bảng, chấp nhận được cho puzzle 6x6/8x8.
+  function timeToScore(sec) { return Math.max(1, 600 - Math.round(sec)); }
+
+  window.__arcadeApplyRemote = function (d) {
+    if (!d || !d.best) return;
+    var local = loadStats(); local.best = local.best || {};
+    var changed = false;
+    for (var k in d.best) {
+      if (local.best[k] == null || d.best[k] < local.best[k]) { local.best[k] = d.best[k]; changed = true; }
+    }
+    if (typeof d.solves === 'number' && d.solves > (local.solves || 0)) { local.solves = d.solves; changed = true; }
+    if (changed) { try { localStorage.setItem('rumba_stats', JSON.stringify(local)); } catch (e) {} }
+  };
 
   function win() {
     state.done = true;
@@ -322,6 +341,10 @@
       stats.daily[state.seed] = state.elapsed;
     }
     saveStats(stats);
+    if (window.ArcadeGame && noHint) {
+      ArcadeGame.onScore('alltime', timeToScore(state.elapsed));
+      if (state.mode === 'daily') ArcadeGame.onScore('daily', timeToScore(state.elapsed));
+    }
 
     document.getElementById('winTime').textContent = fmt(state.elapsed);
     document.getElementById('winHints').textContent = String(state.hints);
