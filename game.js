@@ -373,7 +373,7 @@
     var d = new Date();
     state.shareText = 'Rumba ' + (state.mode === 'daily' ? (d.getDate() < 10 ? '0' : '') + d.getDate() + '/' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + ' · ' : '') +
       state.N + '×' + state.N + ' · ' + fmt(state.elapsed) + ' · ' + state.hints + ' gợi ý' +
-      (streak > 0 ? ' 🔥' + streak : '') + ' play.bomclaw.org/rumba';
+      (streak > 0 ? ' 🔥' + streak : '') + ' https://rumba.bomclaw.org';
     document.getElementById('winStreak').textContent = streak > 0 ? '🔥' + streak : '–';
 
     document.getElementById('winTime').textContent = fmt(state.elapsed);

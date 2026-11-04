@@ -193,7 +193,7 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
     await cdp.shot('/tmp/rumba-win.png');
     await tapSel('#winShare'); await sleep(200);
     const copied = await q('window.__copied');
-    gate('nút Chia sẻ chép dòng kết quả', /^Rumba \d\d\/\d\d · 6×6 · \d+:\d\d · 0 gợi ý 🔥1 play\.bomclaw\.org\/rumba$/.test(copied), copied);
+    gate('nút Chia sẻ chép dòng kết quả', /^Rumba \d\d\/\d\d · 6×6 · \d+:\d\d · 0 gợi ý 🔥1 https:\/\/rumba\.bomclaw\.org$/.test(copied), copied);
     gate('dòng chia sẻ không chứa bàn cờ', !/[☀🌙⬛⬜🟨]|\n/u.test(copied));
     const streak3 = await q(`(() => { const d = new Date(), o = {}; for (let k = 0; k < 3; k++) { const x = new Date(d); x.setDate(d.getDate() - k); o[x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0')] = 60; } return window.__rumba.streakOf(o); })()`);
     gate('streak đếm ngày liên tiếp', streak3 === 3, String(streak3));
