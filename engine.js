@@ -151,105 +151,110 @@
   // ---------------------------------------------------------------------
   // Logic solver — deduction only (no guessing). Returns how far pure logic
   // gets. Used for hints and difficulty grading.
-  // Returns { board, solved, steps } where steps lists forced fills in order.
+  //   opts.advanced: also use one-cell lookahead ("if this cell were X, the
+  //   basic rules hit a contradiction right away, so it is not X"). That is
+  //   still a deduction a person can make on paper; it is what makes "hard".
+  // Returns { board, solved, steps, level } where steps lists forced fills in
+  // order ({r,c,v,reason,src:[cell indexes that justify it]}) and level is
+  // 1 (basic rules were enough) or 2 (lookahead was needed).
   // ---------------------------------------------------------------------
-  function logicSolve(puzzle) {
+  function logicSolve(puzzle, opts) {
+    opts = opts || {};
     var N = puzzle.N, half = N / 2;
-    var board = Int8Array.from(puzzle.cells);
     var hRel = puzzle.hRel, vRel = puzzle.vRel;
+    var board = Int8Array.from(puzzle.cells);
     var steps = [];
+    var level = 1;
 
-    function get(r, c) { return (r < 0 || c < 0 || r >= N || c >= N) ? -2 : board[r * N + c]; }
-    function set(r, c, v, reason) {
-      if (board[r * N + c] === -1) { board[r * N + c] = v; steps.push({ r: r, c: c, v: v, reason: reason }); return true; }
-      return false;
-    }
-    function rel(r1, c1, r2, c2) {
-      if (r1 === r2) { var c = Math.min(c1, c2); return hRel[r1 * (N - 1) + c]; }
-      var rr = Math.min(r1, r2); return vRel[rr * N + c1];
-    }
-
-    var changed = true, guard = 0;
-    while (changed && guard++ < 10000) {
-      changed = false;
-
-      // Rule A: constraint propagation (= / x)
-      for (var r = 0; r < N; r++) {
-        for (var c = 0; c < N; c++) {
-          var v = board[r * N + c];
+    // basic rules to a fixpoint on b; returns false on contradiction
+    function basic(b, out) {
+      function get(r, c) { return (r < 0 || c < 0 || r >= N || c >= N) ? -2 : b[r * N + c]; }
+      var bad = false;
+      function set(r, c, v, reason, srcCells) {
+        var p = r * N + c;
+        if (b[p] === -1) { b[p] = v; if (out) out.push({ r: r, c: c, v: v, reason: reason, src: srcCells }); return true; }
+        if (b[p] !== v) bad = true;
+        return false;
+      }
+      var changed = true, guard = 0;
+      while (changed && !bad && guard++ < 10000) {
+        changed = false;
+        var r, c, v, p;
+        // Rule A: = / x constraints
+        for (r = 0; r < N; r++) for (c = 0; c < N; c++) {
+          p = r * N + c; v = b[p];
           if (v < 0) continue;
-          // horizontal edge to the right
-          if (c < N - 1) {
-            var hr = hRel[r * (N - 1) + c];
-            if (hr === EQ && set(r, c + 1, v, 'eq')) changed = true;
-            else if (hr === NE && set(r, c + 1, 1 - v, 'ne')) changed = true;
+          if (c < N - 1) { var hr = hRel[r * (N - 1) + c]; if (hr && set(r, c + 1, hr === EQ ? v : 1 - v, hr === EQ ? 'eq' : 'ne', [p])) changed = true; }
+          if (c > 0) { var hl = hRel[r * (N - 1) + c - 1]; if (hl && set(r, c - 1, hl === EQ ? v : 1 - v, hl === EQ ? 'eq' : 'ne', [p])) changed = true; }
+          if (r < N - 1) { var vd = vRel[r * N + c]; if (vd && set(r + 1, c, vd === EQ ? v : 1 - v, vd === EQ ? 'eq' : 'ne', [p])) changed = true; }
+          if (r > 0) { var vu = vRel[(r - 1) * N + c]; if (vu && set(r - 1, c, vu === EQ ? v : 1 - v, vu === EQ ? 'eq' : 'ne', [p])) changed = true; }
+        }
+        // Rule B: no three in a row
+        for (r = 0; r < N; r++) for (c = 0; c < N; c++) {
+          var a = get(r, c);
+          if (a < 0) continue;
+          if (get(r, c + 1) === a) {
+            if (get(r, c - 1) === -1 && set(r, c - 1, 1 - a, 'no3', [r * N + c, r * N + c + 1])) changed = true;
+            if (get(r, c + 2) === -1 && set(r, c + 2, 1 - a, 'no3', [r * N + c, r * N + c + 1])) changed = true;
           }
-          if (c > 0) {
-            var hl = hRel[r * (N - 1) + (c - 1)];
-            if (hl === EQ && set(r, c - 1, v, 'eq')) changed = true;
-            else if (hl === NE && set(r, c - 1, 1 - v, 'ne')) changed = true;
+          if (get(r, c + 2) === a && get(r, c + 1) === -1 && set(r, c + 1, 1 - a, 'no3', [r * N + c, r * N + c + 2])) changed = true;
+          if (get(r + 1, c) === a) {
+            if (get(r - 1, c) === -1 && set(r - 1, c, 1 - a, 'no3', [r * N + c, (r + 1) * N + c])) changed = true;
+            if (get(r + 2, c) === -1 && set(r + 2, c, 1 - a, 'no3', [r * N + c, (r + 1) * N + c])) changed = true;
           }
-          if (r < N - 1) {
-            var vd = vRel[r * N + c];
-            if (vd === EQ && set(r + 1, c, v, 'eq')) changed = true;
-            else if (vd === NE && set(r + 1, c, 1 - v, 'ne')) changed = true;
-          }
-          if (r > 0) {
-            var vu = vRel[(r - 1) * N + c];
-            if (vu === EQ && set(r - 1, c, v, 'eq')) changed = true;
-            else if (vu === NE && set(r - 1, c, 1 - v, 'ne')) changed = true;
+          if (get(r + 2, c) === a && get(r + 1, c) === -1 && set(r + 1, c, 1 - a, 'no3', [r * N + c, (r + 2) * N + c])) changed = true;
+        }
+        // Rule C: balance — a line with N/2 of one symbol gets the other
+        for (var line = 0; line < N; line++) {
+          for (var dir = 0; dir < 2; dir++) {
+            var cnt = [0, 0], cells = [], i;
+            for (i = 0; i < N; i++) { p = dir ? i * N + line : line * N + i; cells.push(p); if (b[p] >= 0) cnt[b[p]]++; }
+            if (cnt[0] > half || cnt[1] > half) { bad = true; break; }
+            for (var s = 0; s < 2; s++) {
+              if (cnt[s] === half && cnt[0] + cnt[1] < N) {
+                for (i = 0; i < N; i++) { p = cells[i]; if (b[p] === -1 && set((p / N) | 0, p % N, 1 - s, 'balance', cells)) changed = true; }
+              }
+            }
           }
         }
       }
+      if (bad) return false;
+      // final consistency check (triples)
+      for (var q = 0; q < N * N; q++) {
+        var x = b[q]; if (x < 0) continue;
+        var qr = (q / N) | 0, qc = q % N;
+        if (qc <= N - 3 && b[q + 1] === x && b[q + 2] === x) return false;
+        if (qr <= N - 3 && b[q + N] === x && b[q + 2 * N] === x) return false;
+      }
+      return true;
+    }
 
-      // Rule B: no-three (fill the forced opposite)
-      for (var r2 = 0; r2 < N; r2++) {
-        for (var c2 = 0; c2 < N; c2++) {
-          // horizontal patterns around (r2,c2)
-          // pair XX -> flanks are 1-X
-          if (c2 < N - 1) {
-            var a = get(r2, c2), b = get(r2, c2 + 1);
-            if (a >= 0 && a === b) {
-              if (get(r2, c2 - 1) === -1 && set(r2, c2 - 1, 1 - a, 'no3')) changed = true;
-              if (get(r2, c2 + 2) === -1 && set(r2, c2 + 2, 1 - a, 'no3')) changed = true;
+    function full(b) { for (var q = 0; q < N * N; q++) if (b[q] < 0) return false; return true; }
+
+    basic(board, steps);
+    if (opts.advanced) {
+      var progress = true;
+      while (progress && !full(board)) {
+        progress = false;
+        for (var p = 0; p < N * N && !progress; p++) {
+          if (board[p] !== -1) continue;
+          for (var v = 0; v < 2; v++) {
+            var trial = Int8Array.from(board);
+            trial[p] = v;
+            if (!basic(trial, null)) {
+              level = 2;
+              board[p] = 1 - v;
+              steps.push({ r: (p / N) | 0, c: p % N, v: 1 - v, reason: 'lookahead', src: [p] });
+              basic(board, steps);
+              progress = true;
+              break;
             }
-          }
-          // gap X_X -> middle is 1-X
-          if (c2 < N - 2) {
-            var l = get(r2, c2), m = get(r2, c2 + 1), rr2 = get(r2, c2 + 2);
-            if (l >= 0 && l === rr2 && m === -1) { if (set(r2, c2 + 1, 1 - l, 'no3')) changed = true; }
-          }
-          // vertical pair
-          if (r2 < N - 1) {
-            var a2 = get(r2, c2), b2 = get(r2 + 1, c2);
-            if (a2 >= 0 && a2 === b2) {
-              if (get(r2 - 1, c2) === -1 && set(r2 - 1, c2, 1 - a2, 'no3')) changed = true;
-              if (get(r2 + 2, c2) === -1 && set(r2 + 2, c2, 1 - a2, 'no3')) changed = true;
-            }
-          }
-          if (r2 < N - 2) {
-            var u = get(r2, c2), mm = get(r2 + 1, c2), d = get(r2 + 2, c2);
-            if (u >= 0 && u === d && mm === -1) { if (set(r2 + 1, c2, 1 - u, 'no3')) changed = true; }
           }
         }
-      }
-
-      // Rule C: balance (a line that already has N/2 of a symbol -> rest are opposite)
-      for (var line = 0; line < N; line++) {
-        var cnt0 = 0, cnt1 = 0, i;
-        for (i = 0; i < N; i++) { var vv = board[line * N + i]; if (vv === 0) cnt0++; else if (vv === 1) cnt1++; }
-        if (cnt0 === half && cnt0 + cnt1 < N) for (i = 0; i < N; i++) { if (board[line * N + i] === -1 && set(line, i, 1, 'balance')) changed = true; }
-        if (cnt1 === half && cnt0 + cnt1 < N) for (i = 0; i < N; i++) { if (board[line * N + i] === -1 && set(line, i, 0, 'balance')) changed = true; }
-        cnt0 = 0; cnt1 = 0;
-        for (i = 0; i < N; i++) { var wv = board[i * N + line]; if (wv === 0) cnt0++; else if (wv === 1) cnt1++; }
-        if (cnt0 === half && cnt0 + cnt1 < N) for (i = 0; i < N; i++) { if (board[i * N + line] === -1 && set(i, line, 1, 'balance')) changed = true; }
-        if (cnt1 === half && cnt0 + cnt1 < N) for (i = 0; i < N; i++) { if (board[i * N + line] === -1 && set(i, line, 0, 'balance')) changed = true; }
       }
     }
 
-    var solved = true;
-    for (var q = 0; q < N * N; q++) if (board[q] < 0) { solved = false; break; }
-    return { board: board, solved: solved, steps: steps };
+    return { board: board, solved: full(board), steps: steps, level: level };
   }
 
   // ---------------------------------------------------------------------
@@ -260,8 +265,9 @@
   // Strategy: start from a fully-clued board (all cells given + all edge
   // constraints) and greedily remove clues. The removal *predicate* is what
   // sets difficulty:
-  //   hard   -> keep only uniqueness (result may require guessing)
-  //   medium -> keep uniqueness AND pure-logic solvability
+  //   hard   -> unique AND solvable by logic incl. one-cell lookahead
+  //             (never needs guessing; Nikoli rule)
+  //   medium -> unique AND solvable by the basic rules alone
   //   easy   -> like medium, then reveal a handful of extra given cells
   // ---------------------------------------------------------------------
   function generate(opts) {
@@ -300,7 +306,7 @@
     shuffle(clues, rng);
     clues.sort(function (a, b) { return (a.t === 'c' ? 0 : 1) - (b.t === 'c' ? 0 : 1); });
 
-    var requireLogic = (difficulty !== 'hard');
+    var logicOpts = { advanced: difficulty === 'hard' };
 
     for (var k = 0; k < clues.length; k++) {
       var cl = clues[k], saved;
@@ -309,7 +315,7 @@
       else { saved = cells[cl.i]; if (saved < 0) continue; cells[cl.i] = -1; given[cl.i] = 0; }
 
       var keepRemoved = countSolutions(puzzleView(), 2) === 1;
-      if (keepRemoved && requireLogic) keepRemoved = logicSolve(puzzleView()).solved;
+      if (keepRemoved) keepRemoved = logicSolve(puzzleView(), logicOpts).solved;
 
       if (!keepRemoved) { // revert
         if (cl.t === 'h') hRel[cl.i] = saved;
@@ -334,12 +340,13 @@
     for (i = 0; i < cells.length; i++) if (cells[i] >= 0) nGiven++;
     for (i = 0; i < hRel.length; i++) if (hRel[i]) nCon++;
     for (i = 0; i < vRel.length; i++) if (vRel[i]) nCon++;
-    var logicSolvable = logicSolve(puzzleView()).solved;
+    var ls = logicSolve(puzzleView(), { advanced: true });
+    var logicSolvable = ls.solved;
 
     return {
       N: N, difficulty: difficulty, seed: seed,
       solution: sol, cells: cells, given: given, hRel: hRel, vRel: vRel,
-      stats: { givens: nGiven, constraints: nCon, logicSolvable: logicSolvable }
+      stats: { givens: nGiven, constraints: nCon, logicSolvable: logicSolvable, level: ls.level }
     };
   }
 

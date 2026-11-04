@@ -3,6 +3,10 @@
   'use strict';
   var R = window.Rumba;
   var EQ = R.EQ, NE = R.NE;
+  // Daily = one puzzle per day for everybody, whatever size/difficulty is picked.
+  var DAILY_N = 6, DAILY_DIFF = 'medium';
+  // Each hint adds this many seconds to the leaderboard time (records stay hint-free).
+  var HINT_PENALTY = 30;
 
   // ---- SVG glyphs (accessible: distinct shape + colour) ----
   var SUN_SVG = '<svg class="glyph" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" fill="#fff5df"/>' +
@@ -22,7 +26,7 @@
 
   // ---- state ----
   var state = {
-    N: 6, diff: 'easy', mode: 'free',
+    N: 6, diff: 'easy', mode: 'free', prefN: 6, prefDiff: 'easy', dateKey: null, hintAt: -1,
     puz: null, board: null, given: null,
     history: [], hints: 0, logicSteps: [],
     started: 0, elapsed: 0, timerId: 0, done: false, seed: 0
@@ -200,42 +204,41 @@
   });
 
   // ---------------- hint ----------------
+  // Hint, two presses: the 1st highlights the cells that force the next step
+  // and says why; pressing again on the same step fills it in. Each new step
+  // shown counts as one hint (+HINT_PENALTY s on the leaderboard time).
+  function clearMarks() { for (var i = 0; i < tileEls.length; i++) if (tileEls[i]) tileEls[i].classList.remove('hintsrc', 'hinttarget'); }
   function hint() {
     if (state.done) return;
-    hintLineEl.textContent = '';
-    // clear any wrong cells the user placed that block the next logical step?
-    // Strategy: use precomputed logic step order from the clean puzzle.
     var b = state.board, sol = state.puz.solution, N = state.N;
+    clearMarks();
 
     // 1) if a user cell is wrong, point it out first
     for (var p = 0; p < N * N; p++) {
       if (!state.given[p] && b[p] >= 0 && b[p] !== sol[p]) {
         setCell(p, -1, false);
-        state.hints++;
+        state.hints++; state.hintAt = -1;
         hintLineEl.innerHTML = 'Một ô đang sai đã được <b>gỡ ra</b>.';
         flash(p);
         return;
       }
     }
-    // 2) reveal the next logically-forced empty cell
+    // 2) next logically-forced empty cell
     for (var s = 0; s < state.logicSteps.length; s++) {
       var st = state.logicSteps[s];
       var pos = st.r * N + st.c;
-      if (b[pos] === -1) {
+      if (b[pos] !== -1) continue;
+      if (state.hintAt === s) {           // 2nd press: fill it
+        state.hintAt = -1;
         setCell(pos, st.v, true);
-        state.hints++;
-        hintLineEl.innerHTML = 'Gợi ý: ' + reasonText(st.reason) + '.';
+        hintLineEl.innerHTML = 'Đã điền: ' + reasonText(st.reason) + '.';
         return;
       }
-    }
-    // 3) fallback (hard puzzles): reveal a correct empty cell
-    var empties = [];
-    for (var q = 0; q < N * N; q++) if (b[q] === -1) empties.push(q);
-    if (empties.length) {
-      var pick = empties[Math.floor(Math.random() * empties.length)];
-      setCell(pick, sol[pick], true);
-      state.hints++;
-      hintLineEl.innerHTML = 'Gợi ý: đã mở một ô đúng.';
+      state.hintAt = s; state.hints++;    // 1st press: show where + why
+      (st.src || []).forEach(function (q) { if (tileEls[q]) tileEls[q].classList.add('hintsrc'); });
+      tileEls[pos].classList.add('hinttarget');
+      hintLineEl.innerHTML = 'Gợi ý: ' + reasonText(st.reason) + ' — nhìn ô viền sáng. <b>Bấm lần nữa</b> để điền.';
+      return;
     }
   }
   function reasonText(reason) {
@@ -244,6 +247,7 @@
       case 'ne': return 'dấu × buộc hai ô khác nhau';
       case 'no3': return 'tránh ba ô liền nhau giống nhau';
       case 'balance': return 'hàng/cột đã đủ một loại';
+      case 'lookahead': return 'thử đặt ngược lại ở ô này sẽ phạm luật ngay';
       default: return 'suy luận được ô này';
     }
   }
@@ -268,14 +272,26 @@
     var d = new Date();
     return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
   }
+  function dayKey(d) { return d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate(); }
+  // 🔥 streak: consecutive days (ending today, or yesterday if today is not solved yet) with a solved daily
+  function streakOf(daily) {
+    daily = daily || {};
+    var d = new Date(), n = 0;
+    if (daily[dayKey(d)] == null) d.setDate(d.getDate() - 1);
+    while (daily[dayKey(d)] != null) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+  }
   function newGame(mode) {
     stopTimer();
     state.mode = mode || 'free';
     var seed;
     if (state.mode === 'daily') {
-      // deterministic per day + size + difficulty
-      seed = todaySeed() * 100 + state.N + (state.diff === 'easy' ? 1 : state.diff === 'medium' ? 2 : 3) * 10;
+      // one puzzle per day, same for everybody: fixed size + difficulty
+      state.N = DAILY_N; state.diff = DAILY_DIFF;
+      state.dateKey = dayKey(new Date());
+      seed = todaySeed() * 100 + DAILY_N + 20;
     } else {
+      state.N = state.prefN; state.diff = state.prefDiff; state.dateKey = null;
       seed = (Math.floor(Math.random() * 2147483647));
     }
     state.seed = seed;
@@ -284,9 +300,10 @@
     state.given = puz.given;
     state.board = Int8Array.from(puz.cells);
     state.history = [];
-    state.hints = 0;
+    state.hints = 0; state.hintAt = -1;
     state.elapsed = 0; state.started = 0; state.done = false;
-    state.logicSteps = R.logicSolve({ N: puz.N, cells: puz.cells, hRel: puz.hRel, vRel: puz.vRel }).steps;
+    state.logicSteps = R.logicSolve({ N: puz.N, cells: puz.cells, hRel: puz.hRel, vRel: puz.vRel }, { advanced: true }).steps;
+    if (window.ArcadeGame && ArcadeGame.track) ArcadeGame.track('start', { mode: state.mode, n: state.N, diff: state.diff });
     timerEl.textContent = '0:00';
     hintLineEl.textContent = '';
     if (state.mode === 'daily') {
@@ -338,13 +355,26 @@
     stats.solves = (stats.solves || 0) + 1;
     if (state.mode === 'daily') {
       stats.daily = stats.daily || {};
-      stats.daily[state.seed] = state.elapsed;
+      // keyed by date (not seed): one daily per day
+      if (stats.daily[state.dateKey] == null || state.elapsed < stats.daily[state.dateKey]) stats.daily[state.dateKey] = state.elapsed;
     }
+    var streak = streakOf(stats.daily);
     saveStats(stats);
-    if (window.ArcadeGame && noHint) {
-      ArcadeGame.onScore('alltime', timeToScore(state.elapsed));
-      if (state.mode === 'daily') ArcadeGame.onScore('daily', timeToScore(state.elapsed));
+    // hints no longer block the score: each one costs HINT_PENALTY seconds
+    var scoreSec = state.elapsed + HINT_PENALTY * state.hints;
+    if (window.ArcadeGame) {
+      ArcadeGame.onScore('alltime', timeToScore(scoreSec));
+      if (state.mode === 'daily' && state.N === DAILY_N && state.diff === DAILY_DIFF) ArcadeGame.onScore('daily', timeToScore(scoreSec));
+      if (ArcadeGame.track) {
+        ArcadeGame.track('win', { mode: state.mode, n: state.N, diff: state.diff, sec: state.elapsed, hints: state.hints });
+        if (state.mode === 'daily') ArcadeGame.track('daily_win', { streak: streak, hints: state.hints });
+      }
     }
+    var d = new Date();
+    state.shareText = 'Rumba ' + (state.mode === 'daily' ? (d.getDate() < 10 ? '0' : '') + d.getDate() + '/' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + ' · ' : '') +
+      state.N + '×' + state.N + ' · ' + fmt(state.elapsed) + ' · ' + state.hints + ' gợi ý' +
+      (streak > 0 ? ' 🔥' + streak : '') + ' play.bomclaw.org/rumba';
+    document.getElementById('winStreak').textContent = streak > 0 ? '🔥' + streak : '–';
 
     document.getElementById('winTime').textContent = fmt(state.elapsed);
     document.getElementById('winHints').textContent = String(state.hints);
@@ -352,7 +382,7 @@
     document.getElementById('winSub').textContent =
       (state.mode === 'daily' ? 'Câu đố hôm nay · ' : '') +
       state.N + '×' + state.N + ' · ' + diffLabel(state.diff) +
-      (isRecord ? ' · Kỷ lục mới! 🏆' : (noHint ? '' : ' · có dùng gợi ý'));
+      (isRecord ? ' · Kỷ lục mới! 🏆' : (noHint ? '' : ' · +' + (HINT_PENALTY * state.hints) + 's vì gợi ý'));
     document.getElementById('overlay').classList.add('show');
     confetti();
   }
@@ -379,15 +409,15 @@
     var btn = e.target.closest('button'); if (!btn) return;
     [].forEach.call(this.children, function (b) { b.classList.remove('on'); });
     btn.classList.add('on');
-    state.N = +btn.dataset.size;
-    newGame(state.mode);
+    state.prefN = +btn.dataset.size;
+    newGame('free');
   });
   document.getElementById('diffSeg').addEventListener('click', function (e) {
     var btn = e.target.closest('button'); if (!btn) return;
     [].forEach.call(this.children, function (b) { b.classList.remove('on'); });
     btn.classList.add('on');
-    state.diff = btn.dataset.diff;
-    newGame(state.mode);
+    state.prefDiff = btn.dataset.diff;
+    newGame('free');
   });
   document.getElementById('undoBtn').addEventListener('click', undo);
   document.getElementById('eraseBtn').addEventListener('click', erase);
@@ -395,11 +425,19 @@
   document.getElementById('newBtn').addEventListener('click', function () { newGame('free'); });
   document.getElementById('dailyBtn').addEventListener('click', function () { newGame('daily'); });
 
+  document.getElementById('winShare').addEventListener('click', function () {
+    var text = state.shareText || '', btn = this;
+    function done(ok) { btn.textContent = ok ? 'Đã chép ✓' : 'Chia sẻ'; setTimeout(function () { btn.textContent = 'Chia sẻ'; }, 1800); }
+    if (window.ArcadeGame && ArcadeGame.track) ArcadeGame.track('share', { mode: state.mode });
+    if (navigator.share) { navigator.share({ text: text }).then(function () { done(true); }, function () {}); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    else { var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(true); } catch (e) { done(false); } ta.remove(); }
+  });
   document.getElementById('winReplay').addEventListener('click', function () {
     document.getElementById('overlay').classList.remove('show');
     // replay same puzzle
     state.board = Int8Array.from(state.puz.cells);
-    state.history = []; state.hints = 0; state.elapsed = 0; state.started = 0; state.done = false;
+    state.history = []; state.hints = 0; state.hintAt = -1; state.elapsed = 0; state.started = 0; state.done = false;
     timerEl.textContent = '0:00'; hintLineEl.textContent = '';
     render();
   });
@@ -428,7 +466,10 @@
         for (var p = 0; p < state.N * state.N; p++) state.board[p] = state.puz.solution[p];
         startTimer(); render();
       },
-      newGame: newGame
+      newGame: newGame,
+      streakOf: streakOf,
+      hint: hint,
+      DAILY_N: DAILY_N, DAILY_DIFF: DAILY_DIFF, HINT_PENALTY: HINT_PENALTY
     };
   }
 
