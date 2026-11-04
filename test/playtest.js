@@ -16,10 +16,13 @@ if (!WebSocket) {
   process.exit(2);
 }
 
-const SRV_PORT = 8797;
+const SRV_PORT = 8700 + Math.floor(Math.random() * 90);
 const URL = process.argv[2] || `http://127.0.0.1:${SRV_PORT}/?debug=1`;
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const PORT = 9334;
+// CDP port is picked by Chrome itself (--remote-debugging-port=0, read back from
+// DevToolsActivePort): a fixed port let a concurrent harness (Castle Busters also
+// used 9334) attach to this Chrome and navigate it away mid-run.
+let PORT = 0;
 const VW = 390, VH = 844, VDPR = 3;      // iPhone 14 Pro — viewport mục tiêu của skill
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -95,18 +98,28 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
   const srv = process.argv[2] ? null : spawn(process.execPath, [require('node:path').join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(SRV_PORT) }, stdio: 'ignore' });
   const profile = fs.mkdtempSync('/tmp/rumba-chrome-');
   const chrome = spawn(CHROME, [
-    '--headless=new', '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
+    '--headless=new', '--no-sandbox', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars',
     '--mute-audio', `--window-size=${VW},${VH}`, 'about:blank'
   ], { stdio: 'ignore' });
 
   let cdp;
   const q = (expr) => cdp.evaluate(expr);
+  // wait until the board stops moving (the SDK injects UI after load and shifts the layout)
+  const settle = async () => {
+    let last = '', same = 0;
+    for (let k = 0; k < 60 && same < 4; k++) {
+      const cur = await q(`JSON.stringify(document.getElementById('board').getBoundingClientRect())`);
+      same = cur === last ? same + 1 : 0; last = cur; await sleep(150);
+    }
+  };
   const tapSel = async (sel, i) => { const p = await q(center(sel, i)); await cdp.tap(p.x, p.y); await sleep(120); };
   const S = () => q('(() => { const s = window.__rumba.state; return { N: s.N, diff: s.diff, mode: s.mode, board: Array.from(s.board), cells: Array.from(s.puz.cells), sol: Array.from(s.puz.solution), given: Array.from(s.given), hints: s.hints, done: s.done, seed: s.seed, shareText: s.shareText || "" }; })()');
 
   try {
     await sleep(400);
+    for (let i = 0; i < 60 && !PORT; i++) { try { PORT = +fs.readFileSync(require('node:path').join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch (e) { await sleep(200); } }
+    if (!PORT) throw new Error('Chrome did not write DevToolsActivePort');
     for (let i = 0; i < 60; i++) { try { await getJSON('/json/version'); break; } catch (e) { await sleep(200); } }
     const page = (await getJSON('/json/list')).find((t) => t.type === 'page');
     cdp = new CDP(page.webSocketDebuggerUrl);
@@ -123,6 +136,7 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
     const errs = cdp.events.filter((e) => (e.method === 'Log.entryAdded' && e.params.entry.level === 'error' && e.params.entry.source !== 'network') || e.method === 'Runtime.exceptionThrown');
     gate('0 lỗi JS', errs.length === 0, errs.length ? JSON.stringify(errs.slice(0, 2)).slice(0, 400) : 'sạch');
     await q(`document.getElementById('help').classList.remove('show'), 0`);
+    await settle();
     let s = await S();
     const tiles = await q(`document.querySelectorAll('#board .tile').length`);
     gate('bàn cờ dựng đủ ô', tiles === s.N * s.N, `${s.N}×${s.N} = ${tiles}`);
@@ -157,11 +171,11 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
     gate('8×8 Khó giải trọn bằng chuỗi gợi ý logic', s.done && s.N === 8, guard + ' lần bấm');
     await q(`document.getElementById('overlay').classList.remove('show'), 0`);
 
-    await tapSel('#dailyBtn');
+    await tapSel('#dailyBtn'); await settle();
     s = await S();
     const seedDaily = s.seed;
     gate('daily = 6×6 Vừa dù đang chọn 8×8 Khó', s.mode === 'daily' && s.N === 6 && s.diff === 'medium');
-    await tapSel('#sizeSeg button[data-size="8"]'); await tapSel('#dailyBtn');
+    await tapSel('#sizeSeg button[data-size="8"]'); await tapSel('#dailyBtn'); await settle();
     s = await S();
     gate('daily cùng một đề trong ngày', s.seed === seedDaily && s.N === 6);
 
@@ -185,7 +199,8 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
     gate('streak đếm ngày liên tiếp', streak3 === 3, String(streak3));
   } catch (e) {
     let where = ''; try { where = await q('location.href'); } catch (x) {}
-    gate('harness chạy hết', false, e.message + ' @ ' + where);
+    const nav = cdp ? cdp.events.filter((m) => /frameNavigated|Inspector|targetCrashed|loadEventFired/.test(m.method)).map((m) => m.method + (m.params.frame ? ' ' + m.params.frame.url : '')) : [];
+    gate('harness chạy hết', false, e.message.split('\n')[0] + ' @ ' + where + ' events: ' + nav.join(' | '));
   } finally {
     try { chrome.kill(); } catch (e) {}
     if (srv) try { srv.kill(); } catch (e) {}
