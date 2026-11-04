@@ -89,6 +89,8 @@
   .tile.sun{background:radial-gradient(120% 120% at 30% 25%,var(--sun-a),var(--sun-b))}
   .tile.moon{background:radial-gradient(120% 120% at 30% 25%,var(--moon-a),var(--moon-b))}
   .tile.err{box-shadow:inset 0 0 0 2.5px var(--err), 0 0 12px rgba(255,107,125,.35)}
+  .tile.hintsrc{box-shadow:inset 0 0 0 3px var(--accent)}
+  .tile.hinttarget{box-shadow:inset 0 0 0 3px var(--ok); animation:hintpulse 1.2s ease infinite}
   .tile.hintflash{animation:hintpulse .9s ease}
   @keyframes hintpulse{0%{box-shadow:inset 0 0 0 3px var(--ok)}100%{box-shadow:inset 0 0 0 0 transparent}}
   .tile.lock::after{content:""; position:absolute; right:6px; top:6px; width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.35)}
@@ -222,8 +224,10 @@
         <div class="chip"><span class="k">Thời gian</span><span class="v" id="winTime">0:00</span></div>
         <div class="chip"><span class="k">Gợi ý</span><span class="v" id="winHints">0</span></div>
         <div class="chip"><span class="k">Kỷ lục</span><span class="v" id="winBest">–</span></div>
+        <div class="chip"><span class="k">Chuỗi ngày</span><span class="v" id="winStreak">–</span></div>
       </div>
       <div class="row">
+        <button class="btn" id="winShare">Chia sẻ</button>
         <button class="btn" id="winReplay">Chơi lại</button>
         <button class="btn primary" id="winNext">Ván mới</button>
       </div>
