@@ -16,8 +16,15 @@ if (!WebSocket) {
   process.exit(2);
 }
 
-const SRV_PORT = 8700 + Math.floor(Math.random() * 90);
-const URL = process.argv[2] || `http://127.0.0.1:${SRV_PORT}/?debug=1`;
+// Game server port: let the OS hand out a free one. A random pick from 8700-8789
+// sometimes landed on a port already in use; our server then died silently and the
+// page loaded someone else's (older) build -> "__rumba.hint is not a function".
+let URL = process.argv[2] || '';
+const freePort = () => new Promise((res, rej) => {
+  const s = require('node:net').createServer();
+  s.once('error', rej);
+  s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); });
+});
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 // CDP port is picked by Chrome itself (--remote-debugging-port=0, read back from
 // DevToolsActivePort): a fixed port let a concurrent harness (Castle Busters also
@@ -95,7 +102,24 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
   return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`;
 
 (async function main() {
-  const srv = process.argv[2] ? null : spawn(process.execPath, [require('node:path').join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(SRV_PORT) }, stdio: 'ignore' });
+  let srv = null;
+  if (!URL) {
+    const srvPort = await freePort();
+    URL = `http://127.0.0.1:${srvPort}/?debug=1`;
+    srv = spawn(process.execPath, [require('node:path').join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(srvPort) }, stdio: ['ignore', 'ignore', 'pipe'] });
+    let srvErr = ''; srv.stderr.on('data', (c) => (srvErr += c));
+    // wait until OUR server answers with OUR game.js; fail loudly if it exited
+    const local = fs.readFileSync(require('node:path').join(__dirname, '..', 'game.js'), 'utf8');
+    let ok = false;
+    for (let i = 0; i < 50 && !ok; i++) {
+      if (srv.exitCode !== null) throw new Error('game server exited: ' + srvErr.split('\n')[0]);
+      ok = await new Promise((res) => http.get({ host: '127.0.0.1', port: srvPort, path: '/game.js' }, (r) => {
+        let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => res(b === local));
+      }).on('error', () => res(false)));
+      if (!ok) await sleep(100);
+    }
+    if (!ok) { srv.kill(); throw new Error('game server on :' + srvPort + ' did not serve this checkout\'s game.js'); }
+  }
   const profile = fs.mkdtempSync('/tmp/rumba-chrome-');
   const chrome = spawn(CHROME, [
     '--headless=new', '--no-sandbox', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
@@ -193,7 +217,7 @@ const center = (sel, i) => `(() => { const r = document.querySelectorAll('${sel}
     await cdp.shot('/tmp/rumba-win.png');
     await tapSel('#winShare'); await sleep(200);
     const copied = await q('window.__copied');
-    gate('nút Chia sẻ chép dòng kết quả', /^Rumba \d\d\/\d\d · 6×6 · \d+:\d\d · 0 gợi ý 🔥1 play\.bomclaw\.org\/rumba$/.test(copied), copied);
+    gate('nút Chia sẻ chép dòng kết quả', /^Rumba \d\d\/\d\d · 6×6 · \d+:\d\d · 0 gợi ý 🔥1 https:\/\/rumba\.bomclaw\.org$/.test(copied), copied);
     gate('dòng chia sẻ không chứa bàn cờ', !/[☀🌙⬛⬜🟨]|\n/u.test(copied));
     const streak3 = await q(`(() => { const d = new Date(), o = {}; for (let k = 0; k < 3; k++) { const x = new Date(d); x.setDate(d.getDate() - k); o[x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0')] = 60; } return window.__rumba.streakOf(o); })()`);
     gate('streak đếm ngày liên tiếp', streak3 === 3, String(streak3));
